@@ -29,6 +29,11 @@ import type { ProviderKeys, CustomEndpointKeys } from "./keyring";
 import { createProxyFetch } from "./proxyFetch";
 
 const localProxyFetch = createProxyFetch({ allowPrivateNetwork: true });
+// Cloud providers must also go through the Rust proxy: a direct webview fetch
+// to api.anthropic.com / api.openai.com / etc. is a cross-origin request and
+// gets CORS-blocked by WKWebView. Routing through Rust drops the Origin header
+// so the request is treated as a normal server call. Public hosts only.
+const cloudProxyFetch = createProxyFetch();
 
 const TOOL_LABELS: Record<string, (input: Record<string, unknown>) => string> =
   {
@@ -99,27 +104,37 @@ export async function buildLanguageModel(
   switch (provider) {
     case "openai": {
       const { createOpenAI } = await import("@ai-sdk/openai");
-      built = createOpenAI({ apiKey: key })(resolvedModelId);
+      built = createOpenAI({ apiKey: key, fetch: cloudProxyFetch })(
+        resolvedModelId,
+      );
       break;
     }
     case "anthropic": {
       const { createAnthropic } = await import("@ai-sdk/anthropic");
-      built = createAnthropic({ apiKey: key })(resolvedModelId);
+      built = createAnthropic({ apiKey: key, fetch: cloudProxyFetch })(
+        resolvedModelId,
+      );
       break;
     }
     case "google": {
       const { createGoogleGenerativeAI } = await import("@ai-sdk/google");
-      built = createGoogleGenerativeAI({ apiKey: key })(resolvedModelId);
+      built = createGoogleGenerativeAI({ apiKey: key, fetch: cloudProxyFetch })(
+        resolvedModelId,
+      );
       break;
     }
     case "xai": {
       const { createXai } = await import("@ai-sdk/xai");
-      built = createXai({ apiKey: key })(resolvedModelId);
+      built = createXai({ apiKey: key, fetch: cloudProxyFetch })(
+        resolvedModelId,
+      );
       break;
     }
     case "cerebras": {
       const { createCerebras } = await import("@ai-sdk/cerebras");
-      built = createCerebras({ apiKey: key })(resolvedModelId);
+      built = createCerebras({ apiKey: key, fetch: cloudProxyFetch })(
+        resolvedModelId,
+      );
       break;
     }
     case "deepseek": {
@@ -129,6 +144,7 @@ export async function buildLanguageModel(
         name: "deepseek",
         baseURL: "https://api.deepseek.com",
         apiKey: key,
+        fetch: cloudProxyFetch,
       })(resolvedModelId);
       break;
     }
@@ -139,12 +155,15 @@ export async function buildLanguageModel(
         name: "mistral",
         baseURL: "https://api.mistral.ai/v1",
         apiKey: key,
+        fetch: cloudProxyFetch,
       })(resolvedModelId);
       break;
     }
     case "groq": {
       const { createGroq } = await import("@ai-sdk/groq");
-      built = createGroq({ apiKey: key })(resolvedModelId);
+      built = createGroq({ apiKey: key, fetch: cloudProxyFetch })(
+        resolvedModelId,
+      );
       break;
     }
     case "openrouter": {
@@ -154,6 +173,7 @@ export async function buildLanguageModel(
         name: "openrouter",
         baseURL: "https://openrouter.ai/api/v1",
         apiKey: key,
+        fetch: cloudProxyFetch,
         headers: {
           "HTTP-Referer": "https://terax.ai",
           "X-Title": "Terax",

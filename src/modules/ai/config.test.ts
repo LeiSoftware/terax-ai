@@ -6,6 +6,7 @@ import {
   isCompatModelId,
   migrateLegacyCompatEndpoint,
   modelKeepsReasoning,
+  providerNeedsKey,
   resolveModel,
   type CustomEndpoint,
 } from "./config";
@@ -49,6 +50,13 @@ describe("resolveModel", () => {
     expect(resolveModel("gpt-5.4-mini").provider).toBe("openai");
   });
 
+  it("resolves Claude Code as a keyless tool-capable model", () => {
+    const info = resolveModel("claude-code-sonnet");
+    expect(info.provider).toBe("claude-code");
+    expect(info.tags).toContain("tools");
+    expect(providerNeedsKey(info.provider)).toBe(false);
+  });
+
   it("throws on an unknown static model id", () => {
     expect(() => resolveModel("nope-not-real")).toThrow();
   });
@@ -67,7 +75,9 @@ describe("getModelContextLimit", () => {
 
 describe("modelKeepsReasoning", () => {
   it("keeps reasoning for compat endpoints (freeform provider)", () => {
-    const info = resolveModel(compatModelIdForEndpoint(endpoint.id), [endpoint]);
+    const info = resolveModel(compatModelIdForEndpoint(endpoint.id), [
+      endpoint,
+    ]);
     expect(modelKeepsReasoning(info)).toBe(true);
   });
 

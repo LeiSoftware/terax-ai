@@ -100,9 +100,7 @@ const LOCAL_META: Partial<Record<ProviderId, LocalMeta>> = {
     modelPlaceholder: "mlx-community/Qwen2.5-Coder-7B-Instruct-4bit",
     description:
       "Apple-silicon inference via mlx_lm.server (pip install mlx-lm).",
-    modelHint: (
-      <>The Hugging Face repo path you launched mlx_lm.server with.</>
-    ),
+    modelHint: <>The Hugging Face repo path you launched mlx_lm.server with.</>,
   },
   ollama: {
     urlPlaceholder: "http://localhost:11434/v1",
@@ -122,8 +120,18 @@ const LOCAL_META: Partial<Record<ProviderId, LocalMeta>> = {
     description: "Any model on OpenRouter — type its full provider/model id.",
     modelHint: (
       <>
-        Browse ids at{" "}
-        <span className="font-mono">openrouter.ai/models</span>.
+        Browse ids at <span className="font-mono">openrouter.ai/models</span>.
+      </>
+    ),
+  },
+  "claude-code": {
+    urlPlaceholder: "",
+    modelPlaceholder: "sonnet",
+    description: "Use your authenticated Claude Code CLI login.",
+    modelHint: (
+      <>
+        Runs <span className="font-mono">claude -p</span> with Claude Code
+        tools.
       </>
     ),
   },
@@ -229,7 +237,9 @@ export function ModelsSection() {
     const { selectedModelId, setSelectedModelId } = useChatStore.getState();
     if (selectedModelId === deadModelId) {
       setSelectedModelId(
-        remaining[0] ? compatModelIdForEndpoint(remaining[0].id) : DEFAULT_MODEL_ID,
+        remaining[0]
+          ? compatModelIdForEndpoint(remaining[0].id)
+          : DEFAULT_MODEL_ID,
       );
     }
 
@@ -276,14 +286,23 @@ export function ModelsSection() {
           setModelId: setOpenrouterModelId,
           noBaseURL: true,
         };
+      case "claude-code":
+        return {
+          baseURL: "",
+          modelId: "sonnet",
+          setBaseURL: async () => {},
+          setModelId: async () => {},
+          noBaseURL: true,
+          readOnlyModel: true,
+        };
       default:
         return null;
     }
   };
 
   const isConfigured = (id: ProviderId): boolean => {
-    if (id === "openrouter")
-      return !!keys?.[id] && !!openrouterModelId.trim();
+    if (id === "openrouter") return !!keys?.[id] && !!openrouterModelId.trim();
+    if (id === "claude-code") return true;
     if (!isLocalProvider(id)) return !!keys?.[id];
     const cfg = localConfig(id);
     if (!cfg) return false;
@@ -315,7 +334,7 @@ export function ModelsSection() {
     } else if (isLocalProvider(id)) {
       const cfg = localConfig(id);
       if (cfg) {
-        void cfg.setModelId("");
+        if (!cfg.readOnlyModel) void cfg.setModelId("");
         if (id === "openai-compatible") void cfg.setBaseURL("");
       }
       if (id === "openai-compatible") void onClearKey(id);
@@ -428,6 +447,7 @@ type LocalConfig = {
   contextLimit?: number;
   setContextLimit?: (v: number) => Promise<void>;
   noBaseURL?: boolean;
+  readOnlyModel?: boolean;
 };
 
 function AddProviderMenu({
@@ -440,7 +460,9 @@ function AddProviderMenu({
   onAddCompat: () => void;
 }) {
   const cloud = providers.filter((p) => !isLocalProvider(p.id));
-  const local = providers.filter((p) => isLocalProvider(p.id) && p.id !== "openai-compatible");
+  const local = providers.filter(
+    (p) => isLocalProvider(p.id) && p.id !== "openai-compatible",
+  );
 
   return (
     <DropdownMenu>
@@ -615,7 +637,10 @@ function AutocompleteRow({
   // Fast cloud tiers + any configured local provider (one model id each).
   const items = useMemo(() => {
     const local = PROVIDERS.filter(
-      (p) => isLocalProvider(p.id) && configuredIds.has(p.id),
+      (p) =>
+        isLocalProvider(p.id) &&
+        p.id !== "claude-code" &&
+        configuredIds.has(p.id),
     ).flatMap((p) => {
       const m = MODELS.find((x) => x.provider === p.id);
       return m ? [m] : [];
@@ -762,6 +787,7 @@ function LocalProviderCard({
     contextLimit,
     setContextLimit,
     noBaseURL,
+    readOnlyModel,
   } = config;
   const [urlDraft, setUrlDraft] = useState(baseURL);
   const [modelDraft, setModelDraft] = useState(modelId);
@@ -798,7 +824,11 @@ function LocalProviderCard({
             variant="outline"
             className="ml-1 h-4 gap-1 border-border/60 bg-muted/40 px-1.5 text-[10px] font-normal text-muted-foreground"
           >
-            <HugeiconsIcon icon={CheckmarkCircle02Icon} size={9} strokeWidth={2} />
+            <HugeiconsIcon
+              icon={CheckmarkCircle02Icon}
+              size={9}
+              strokeWidth={2}
+            />
             Connected
           </Badge>
         ) : null}
@@ -808,7 +838,11 @@ function LocalProviderCard({
           className="ml-auto inline-flex items-center gap-0.5 text-[10.5px] text-muted-foreground transition-colors hover:text-foreground"
         >
           Docs
-          <HugeiconsIcon icon={ArrowUpRight01Icon} size={11} strokeWidth={1.75} />
+          <HugeiconsIcon
+            icon={ArrowUpRight01Icon}
+            size={11}
+            strokeWidth={1.75}
+          />
         </button>
         <Button
           size="icon"
@@ -854,17 +888,23 @@ function LocalProviderCard({
         )}
 
         <FieldRow label="Model ID">
-          <Input
-            value={modelDraft}
-            onChange={(e) => setModelDraft(e.target.value)}
-            onBlur={() => {
-              const v = modelDraft.trim();
-              if (v !== modelId) void setModelId(v);
-            }}
-            placeholder={meta.modelPlaceholder}
-            spellCheck={false}
-            className="h-8 font-mono text-[11.5px]"
-          />
+          {readOnlyModel ? (
+            <code className="flex-1 rounded bg-muted/40 px-2 py-1.5 font-mono text-[11px] text-muted-foreground">
+              {modelId}
+            </code>
+          ) : (
+            <Input
+              value={modelDraft}
+              onChange={(e) => setModelDraft(e.target.value)}
+              onBlur={() => {
+                const v = modelDraft.trim();
+                if (v !== modelId) void setModelId(v);
+              }}
+              placeholder={meta.modelPlaceholder}
+              spellCheck={false}
+              className="h-8 font-mono text-[11.5px]"
+            />
+          )}
         </FieldRow>
 
         {setContextLimit ? (
@@ -882,7 +922,9 @@ function LocalProviderCard({
                 spellCheck={false}
                 className="h-8 w-28 font-mono text-[11.5px]"
               />
-              <span className="text-[10.5px] text-muted-foreground">tokens</span>
+              <span className="text-[10.5px] text-muted-foreground">
+                tokens
+              </span>
             </div>
           </FieldRow>
         ) : null}
@@ -901,7 +943,11 @@ function LocalProviderCard({
                   title="Remove key"
                   className="size-7 text-muted-foreground hover:text-destructive"
                 >
-                  <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={1.75} />
+                  <HugeiconsIcon
+                    icon={Cancel01Icon}
+                    size={12}
+                    strokeWidth={1.75}
+                  />
                 </Button>
               </div>
             ) : (
@@ -979,8 +1025,7 @@ function CustomEndpointCard({
     [endpoint.contextLimit],
   );
 
-  const configured =
-    !!endpoint.baseURL.trim() && !!endpoint.modelId.trim();
+  const configured = !!endpoint.baseURL.trim() && !!endpoint.modelId.trim();
 
   const test = async () => {
     setTestStatus("testing");
@@ -1022,7 +1067,11 @@ function CustomEndpointCard({
             variant="outline"
             className="ml-1 h-4 gap-1 border-border/60 bg-muted/40 px-1.5 text-[10px] font-normal text-muted-foreground"
           >
-            <HugeiconsIcon icon={CheckmarkCircle02Icon} size={9} strokeWidth={2} />
+            <HugeiconsIcon
+              icon={CheckmarkCircle02Icon}
+              size={9}
+              strokeWidth={2}
+            />
             Connected
           </Badge>
         ) : null}
@@ -1110,7 +1159,9 @@ function CustomEndpointCard({
                 spellCheck={false}
                 className="h-8 w-28 font-mono text-[11.5px]"
               />
-              <span className="text-[10.5px] text-muted-foreground">tokens</span>
+              <span className="text-[10.5px] text-muted-foreground">
+                tokens
+              </span>
             </div>
           </FieldRow>
 
@@ -1127,7 +1178,11 @@ function CustomEndpointCard({
                   title="Remove key"
                   className="size-7 text-muted-foreground hover:text-destructive"
                 >
-                  <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={1.75} />
+                  <HugeiconsIcon
+                    icon={Cancel01Icon}
+                    size={12}
+                    strokeWidth={1.75}
+                  />
                 </Button>
               </div>
             ) : (

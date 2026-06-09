@@ -209,6 +209,7 @@ pub fn run() {
             git::commands::git_commit_file_diff,
             git::commands::git_remote_url,
             shell::shell_run_command,
+            shell::claude_code_print,
             shell::shell_session_open,
             shell::shell_session_run,
             shell::shell_session_close,

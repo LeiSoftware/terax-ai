@@ -10,6 +10,7 @@ export type ProviderId =
   | "deepseek"
   | "mistral"
   | "openrouter"
+  | "claude-code"
   | "openai-compatible"
   | "lmstudio"
   | "mlx"
@@ -90,6 +91,13 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     consoleUrl: "https://openrouter.ai/keys",
   },
   {
+    id: "claude-code",
+    label: "Claude Code",
+    keyringAccount: "",
+    keyPrefix: null,
+    consoleUrl: "https://docs.anthropic.com/en/docs/claude-code",
+  },
+  {
     id: "openai-compatible",
     label: "OpenAI Compatible",
     keyringAccount: "openai-compatible-api-key",
@@ -109,7 +117,8 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     label: "MLX",
     keyringAccount: "",
     keyPrefix: null,
-    consoleUrl: "https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/SERVER.md",
+    consoleUrl:
+      "https://github.com/ml-explore/mlx-lm/blob/main/mlx_lm/SERVER.md",
   },
   {
     id: "ollama",
@@ -270,6 +279,17 @@ export const MODELS = [
     description: "Previous-gen Opus.",
     capabilities: { intelligence: 5, speed: 2, cost: 1 },
     tags: ["vision", "reasoning", "tools", "coding"],
+  },
+
+  // ── Claude Code CLI ────────────────────────────────────────────────────────
+  {
+    id: "claude-code-sonnet",
+    provider: "claude-code",
+    label: "Claude Code Sonnet",
+    hint: "CLI",
+    description: "Uses your authenticated Claude Code CLI session.",
+    capabilities: { intelligence: 4, speed: 3, cost: 5 },
+    tags: ["tools", "coding"],
   },
 
   // ── Google ────────────────────────────────────────────────────────────────
@@ -538,7 +558,9 @@ export function getCompatModelInfo(
     provider: "openai-compatible",
     label: ep?.modelId || name,
     hint: name,
-    description: ep ? `${name} — ${ep.baseURL}` : "Custom OpenAI-compatible endpoint",
+    description: ep
+      ? `${name} — ${ep.baseURL}`
+      : "Custom OpenAI-compatible endpoint",
     capabilities: { intelligence: 3, speed: 3, cost: 3 },
   };
 }
@@ -573,7 +595,10 @@ const FREEFORM_PROVIDERS: ReadonlySet<ProviderId> = new Set([
 
 // Reasoning models reject tool-call turns whose reasoning was stripped; keep it.
 export function modelKeepsReasoning(m: ModelInfo): boolean {
-  return (m.tags?.includes("reasoning") ?? false) || FREEFORM_PROVIDERS.has(m.provider);
+  return (
+    (m.tags?.includes("reasoning") ?? false) ||
+    FREEFORM_PROVIDERS.has(m.provider)
+  );
 }
 
 export const DEFAULT_MODEL_ID: ModelId = "gpt-5.4-mini";
@@ -662,7 +687,11 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
 
 export function estimateCost(
   modelId: string | undefined,
-  usage: { inputTokens: number; outputTokens: number; cachedInputTokens: number },
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    cachedInputTokens: number;
+  },
 ): number | null {
   if (!modelId) return null;
   const p = MODEL_PRICING[modelId];
@@ -670,13 +699,16 @@ export function estimateCost(
   const fresh = Math.max(0, usage.inputTokens - usage.cachedInputTokens);
   const cached = usage.cachedInputTokens;
   return (
-    (fresh * p.input + cached * (p.cacheRead ?? p.input) + usage.outputTokens * p.output) /
+    (fresh * p.input +
+      cached * (p.cacheRead ?? p.input) +
+      usage.outputTokens * p.output) /
     1_000_000
   );
 }
 
 /** Providers that do not require an API key (local servers, key-optional). */
 export const KEYLESS_PROVIDERS: readonly ProviderId[] = [
+  "claude-code",
   "lmstudio",
   "mlx",
   "ollama",
@@ -710,6 +742,7 @@ export const DEFAULT_AUTOCOMPLETE_MODEL: Partial<Record<ProviderId, string>> = {
   xai: "grok-4-fast-reasoning",
   deepseek: "deepseek-v4-flash",
   openrouter: "openai/gpt-5.4-mini",
+  "claude-code": "claude-code-sonnet",
   "openai-compatible": "",
 };
 

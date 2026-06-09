@@ -3,7 +3,7 @@ pub mod ringbuffer;
 pub mod session;
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -23,6 +23,7 @@ use session::{SessionRunOutput, ShellSession};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 300;
+const CLAUDE_TIMEOUT_SECS: u64 = 300;
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 
 #[derive(Serialize)]
@@ -70,6 +71,43 @@ pub async fn shell_run_command(
     let (tx, rx) = mpsc::channel::<Result<CommandOutput, String>>();
     thread::spawn(move || {
         let _ = tx.send(run_blocking(trimmed, cwd_path, workspace, dur));
+    });
+
+    rx.recv().map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn claude_code_print(
+    prompt: String,
+    model: Option<String>,
+    cwd: Option<String>,
+    timeout_secs: Option<u64>,
+    workspace: Option<WorkspaceEnv>,
+    registry: tauri::State<'_, WorkspaceRegistry>,
+) -> Result<CommandOutput, String> {
+    if prompt.trim().is_empty() {
+        return Err("empty prompt".into());
+    }
+
+    let model = model.unwrap_or_else(|| "sonnet".to_string());
+    validate_claude_model_arg(&model)?;
+
+    let workspace = WorkspaceEnv::from_option(workspace);
+    authorize_spawn_cwd(&registry, cwd.as_deref(), &workspace)?;
+    let cwd_path = cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let dur = Duration::from_secs(
+        timeout_secs
+            .unwrap_or(CLAUDE_TIMEOUT_SECS)
+            .clamp(1, MAX_TIMEOUT_SECS),
+    );
+
+    let (tx, rx) = mpsc::channel::<Result<CommandOutput, String>>();
+    thread::spawn(move || {
+        let _ = tx.send(run_claude_print_blocking(prompt, model, cwd_path, workspace, dur));
     });
 
     rx.recv().map_err(|e| e.to_string())?
@@ -144,6 +182,157 @@ fn run_blocking(
         timed_out,
         truncated: stdout_truncated || stderr_truncated,
     })
+}
+
+fn run_claude_print_blocking(
+    prompt: String,
+    model: String,
+    cwd: Option<String>,
+    workspace: WorkspaceEnv,
+    dur: Duration,
+) -> Result<CommandOutput, String> {
+    let child = Arc::new(spawn_claude_print(&model, cwd.as_deref(), &workspace)?);
+    let mut stdin_pipe = child.take_stdin().ok_or_else(|| {
+        let _ = child.kill();
+        "no stdin pipe".to_string()
+    })?;
+    stdin_pipe
+        .write_all(prompt.as_bytes())
+        .and_then(|_| stdin_pipe.flush())
+        .map_err(|e| {
+            let _ = child.kill();
+            e.to_string()
+        })?;
+    drop(stdin_pipe);
+
+    let mut stdout_pipe = child.take_stdout().ok_or_else(|| {
+        let _ = child.kill();
+        "no stdout pipe".to_string()
+    })?;
+    let mut stderr_pipe = child.take_stderr().ok_or_else(|| {
+        let _ = child.kill();
+        "no stderr pipe".to_string()
+    })?;
+
+    let stdout_handle = thread::spawn(move || drain(&mut stdout_pipe));
+    let stderr_handle = thread::spawn(move || drain(&mut stderr_pipe));
+
+    let (tx, rx) = mpsc::channel();
+    let waiter = Arc::clone(&child);
+    thread::spawn(move || {
+        let _ = tx.send(waiter.wait());
+    });
+
+    let (exit_code, timed_out) = match rx.recv_timeout(dur) {
+        Ok(Ok(status)) => (status.code(), false),
+        Ok(Err(e)) => return Err(e.to_string()),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            (None, true)
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            return Err("claude wait thread disconnected".into());
+        }
+    };
+
+    let (stdout_bytes, stdout_truncated) = stdout_handle.join().unwrap_or((Vec::new(), false));
+    let (stderr_bytes, stderr_truncated) = stderr_handle.join().unwrap_or((Vec::new(), false));
+
+    Ok(CommandOutput {
+        stdout: String::from_utf8_lossy(&stdout_bytes).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr_bytes).into_owned(),
+        exit_code,
+        timed_out,
+        truncated: stdout_truncated || stderr_truncated,
+    })
+}
+
+fn spawn_claude_print(
+    model: &str,
+    cwd: Option<&str>,
+    workspace: &WorkspaceEnv,
+) -> Result<SharedChild, String> {
+    #[cfg(windows)]
+    if let WorkspaceEnv::Wsl { distro } = workspace {
+        validate_wsl_distro_name(distro)?;
+        let mut cmd = Command::new("wsl.exe");
+        cmd.arg("-d").arg(distro);
+        if let Some(cwd) = cwd.filter(|s| !s.is_empty()) {
+            cmd.arg("--cd").arg(cwd);
+        }
+        cmd.arg("--exec")
+            .arg("claude")
+            .arg("-p")
+            .arg("--model")
+            .arg(model)
+            .arg("--tools")
+            .arg("default")
+            .arg("--permission-mode")
+            .arg("acceptEdits");
+        return spawn_claude_command(cmd);
+    }
+
+    let mut last_err: Option<String> = None;
+    for exe in claude_command_candidates() {
+        let mut cmd = Command::new(&exe);
+        cmd.arg("-p")
+            .arg("--model")
+            .arg(model)
+            .arg("--tools")
+            .arg("default")
+            .arg("--permission-mode")
+            .arg("acceptEdits");
+        if let (WorkspaceEnv::Local, Some(dir)) = (workspace, cwd) {
+            cmd.current_dir(dir);
+        }
+        match spawn_claude_command(cmd) {
+            Ok(child) => return Ok(child),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| "claude executable not found".to_string()))
+}
+
+fn spawn_claude_command(mut cmd: Command) -> Result<SharedChild, String> {
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::modules::proc::hide_console(&mut cmd);
+    SharedChild::spawn(&mut cmd).map_err(|e| e.to_string())
+}
+
+fn validate_claude_model_arg(model: &str) -> Result<(), String> {
+    if model.is_empty() || model.len() > 80 {
+        return Err("invalid Claude model".into());
+    }
+    if !model
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b':'))
+    {
+        return Err("invalid Claude model".into());
+    }
+    Ok(())
+}
+
+fn claude_command_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    #[cfg(windows)]
+    {
+        out.push(PathBuf::from("claude.cmd"));
+        out.push(PathBuf::from("claude.exe"));
+    }
+    #[cfg(not(windows))]
+    {
+        out.push(PathBuf::from("claude"));
+        if let Some(home) = dirs::home_dir() {
+            out.push(home.join(".local/bin/claude"));
+            out.push(home.join(".npm-global/bin/claude"));
+        }
+        out.push(PathBuf::from("/opt/homebrew/bin/claude"));
+        out.push(PathBuf::from("/usr/local/bin/claude"));
+    }
+    out
 }
 
 // ──────────────────────────────────────────────────────────────────────────

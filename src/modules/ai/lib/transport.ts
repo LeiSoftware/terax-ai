@@ -1,5 +1,6 @@
 import type { UIMessage } from "@ai-sdk/react";
-import { type CustomEndpoint } from "../config";
+import { resolveModel, type CustomEndpoint } from "../config";
+import { isClaudeCodeModel, runClaudeCodeCliStream } from "./claudeCli";
 import { runAgentStream, type AgentUsageDelta } from "./agent";
 import type { ProviderKeys, CustomEndpointKeys } from "./keyring";
 import { native } from "./native";
@@ -9,7 +10,9 @@ const TERAX_MD_MAX_BYTES = 32 * 1024;
 type MemoryCacheEntry = { content: string | null; mtime: number };
 const projectMemoryCache = new Map<string, MemoryCacheEntry>();
 
-async function readTeraxMd(workspaceRoot: string | null): Promise<string | null> {
+async function readTeraxMd(
+  workspaceRoot: string | null,
+): Promise<string | null> {
   if (!workspaceRoot) return null;
   const path = `${workspaceRoot.replace(/\/$/, "")}/TERAX.md`;
   const cached = projectMemoryCache.get(workspaceRoot);
@@ -17,7 +20,10 @@ async function readTeraxMd(workspaceRoot: string | null): Promise<string | null>
   try {
     const r = await native.readFile(path);
     if (r.kind !== "text") {
-      projectMemoryCache.set(workspaceRoot, { content: null, mtime: Date.now() });
+      projectMemoryCache.set(workspaceRoot, {
+        content: null,
+        mtime: Date.now(),
+      });
       return null;
     }
     const content =
@@ -79,9 +85,26 @@ export function createContextAwareTransport(deps: Deps) {
     const messagesForRun = envBlock
       ? injectEnvIntoLastUser(options.messages, envBlock)
       : options.messages;
+    const modelId = deps.getModelId();
+    const model = resolveModel(modelId, deps.getCustomEndpoints?.() ?? []);
+    if (
+      model.provider === "claude-code" ||
+      isClaudeCodeModel(modelId) ||
+      hasClaudeCodeCommand(messagesForRun)
+    ) {
+      return runClaudeCodeCliStream({
+        messages: messagesForRun,
+        customInstructions: deps.getCustomInstructions(),
+        agentPersona: deps.getAgentPersona(),
+        projectMemory,
+        cwd: live.cwd ?? live.workspaceRoot,
+        abortSignal: options.abortSignal,
+        onStep: deps.onStep,
+      });
+    }
     const result = await runAgentStream({
       keys: deps.getKeys(),
-      modelId: deps.getModelId(),
+      modelId,
       customInstructions: deps.getCustomInstructions(),
       agentPersona: deps.getAgentPersona(),
       toolContext: deps.toolContext,
@@ -117,6 +140,19 @@ export function createContextAwareTransport(deps: Deps) {
       return null;
     },
   };
+}
+
+export function hasClaudeCodeCommand(messages: readonly UIMessage[]): boolean {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
+    return message.parts.some(
+      (part) =>
+        part.type === "text" &&
+        part.text.includes('<terax-command name="claude-code" />'),
+    );
+  }
+  return false;
 }
 
 function injectEnvIntoLastUser(

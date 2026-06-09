@@ -24,6 +24,7 @@ import {
   type ProviderId,
 } from "../config";
 import { buildTools, type ToolContext } from "../tools/tools";
+import { buildAnthropicProviderSettings } from "./anthropicAuth";
 import { compactModelMessagesDetailed } from "./compact";
 import type { ProviderKeys, CustomEndpointKeys } from "./keyring";
 import { createProxyFetch } from "./proxyFetch";
@@ -111,9 +112,10 @@ export async function buildLanguageModel(
     }
     case "anthropic": {
       const { createAnthropic } = await import("@ai-sdk/anthropic");
-      built = createAnthropic({ apiKey: key, fetch: cloudProxyFetch })(
-        resolvedModelId,
-      );
+      built = createAnthropic({
+        ...buildAnthropicProviderSettings(key),
+        fetch: cloudProxyFetch,
+      })(resolvedModelId);
       break;
     }
     case "google": {
@@ -138,8 +140,9 @@ export async function buildLanguageModel(
       break;
     }
     case "deepseek": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "deepseek",
         baseURL: "https://api.deepseek.com",
@@ -149,8 +152,9 @@ export async function buildLanguageModel(
       break;
     }
     case "mistral": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "mistral",
         baseURL: "https://api.mistral.ai/v1",
@@ -167,8 +171,9 @@ export async function buildLanguageModel(
       break;
     }
     case "openrouter": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "openrouter",
         baseURL: "https://openrouter.ai/api/v1",
@@ -181,14 +186,18 @@ export async function buildLanguageModel(
       })(resolvedModelId);
       break;
     }
+    case "claude-code": {
+      throw new Error("Claude Code CLI is handled by the chat transport.");
+    }
     case "openai-compatible": {
       if (!compatURL) {
         throw new Error(
           "OpenAI-compatible provider has no base URL. Set it in Settings → Models.",
         );
       }
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "openai-compatible",
         baseURL: compatURL,
@@ -198,8 +207,9 @@ export async function buildLanguageModel(
       break;
     }
     case "lmstudio": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "lmstudio",
         baseURL: lmstudioURL,
@@ -208,8 +218,9 @@ export async function buildLanguageModel(
       break;
     }
     case "mlx": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "mlx",
         baseURL: mlxURL,
@@ -218,8 +229,9 @@ export async function buildLanguageModel(
       break;
     }
     case "ollama": {
-      const { createOpenAICompatible } =
-        await import("@ai-sdk/openai-compatible");
+      const { createOpenAICompatible } = await import(
+        "@ai-sdk/openai-compatible"
+      );
       built = createOpenAICompatible({
         name: "ollama",
         baseURL: ollamaURL,
@@ -260,9 +272,7 @@ export function buildConfiguredLanguageModel(
     const ep = local.customEndpoints?.find((e) => e.id === eid);
     if (!ep) throw new Error(`Custom endpoint not found: ${eid}`);
     if (!ep.modelId.trim()) {
-      throw new Error(
-        `${ep.name}: no model id set. Open Settings → Models.`,
-      );
+      throw new Error(`${ep.name}: no model id set. Open Settings → Models.`);
     }
     return buildLanguageModel(
       "openai-compatible",
